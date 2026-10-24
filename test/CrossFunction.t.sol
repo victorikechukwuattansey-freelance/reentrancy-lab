@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {Test} from "forge-std/Test.sol";
 import {VaultCrossFunction} from "../src/vulnerable/VaultCrossFunction.sol";
 import {CrossFunctionAttacker} from "../src/attack/CrossFunctionAttacker.sol";
+import {VaultGlobalGuard} from "../src/fixed/VaultGlobalGuard.sol";
 
 contract CrossFunctionTest is Test {
     VaultCrossFunction internal vault;
@@ -46,5 +47,48 @@ contract CrossFunctionTest is Test {
         vm.prank(victim);
         vm.expectRevert("send failed");
         vault.withdraw();
+    }
+
+    function test_FixedBlocksCrossFunctionExploit() public {
+        VaultGlobalGuard fixedVault = new VaultGlobalGuard();
+        CrossFunctionAttacker fixedAttacker = new CrossFunctionAttacker(address(fixedVault), accomplice);
+
+        // Victim seeds the fixed vault
+        vm.deal(victim, 10 ether);
+        vm.prank(victim);
+        fixedVault.deposit{value: 10 ether}();
+
+        // Attacker tries the same exploit
+        vm.deal(address(fixedAttacker), 1 ether);
+
+        // The reentrant transfer reverts with ReentrancyGuardReentrantCall,
+        // the outer withdraw fails, the whole attack unwinds
+        vm.expectRevert();
+        fixedAttacker.attack(1 ether);
+
+        // Vault unchanged
+        assertEq(address(fixedVault).balance, 10 ether, "vault intact");
+        assertEq(fixedVault.balances(victim), 10 ether);
+        assertEq(fixedVault.balances(accomplice), 0, "no dup claim");
+    }
+
+    function test_FixedNormalOperationStillWorks() public {
+        VaultGlobalGuard fixedVault = new VaultGlobalGuard();
+
+        vm.deal(victim, 10 ether);
+        vm.prank(victim);
+        fixedVault.deposit{value: 10 ether}();
+
+        // transfer still works
+        vm.prank(victim);
+        fixedVault.transfer(accomplice, 3 ether);
+
+        assertEq(fixedVault.balances(victim), 7 ether);
+        assertEq(fixedVault.balances(accomplice), 3 ether);
+
+        // withdraw still works
+        vm.prank(accomplice);
+        fixedVault.withdraw();
+        assertEq(accomplice.balance, 3 ether);
     }
 }
