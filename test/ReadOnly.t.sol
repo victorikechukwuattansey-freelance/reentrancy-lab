@@ -44,4 +44,38 @@ contract ReadOnlyTest is Test {
         assertEq(lending.debt(address(borrower)), 0, "debt zeroed");
         assertEq(lending.collateral(address(borrower)), 200 ether, "borrower has only redeposit");
     }
+
+    function test_FixedBlocksLiquidationDuringCallback() public {
+        LendingGuard fixedLending = new LendingGuard();
+        Keeper fixedKeeper = new Keeper(address(fixedLending));
+        Borrower fixedBorrower = new Borrower(address(fixedLending), address(fixedKeeper));
+
+        fixedBorrower.deposit{value: 200 ether}();
+        fixedBorrower.borrow(100 ether);
+        assertEq(fixedLending.healthFactor(address(fixedBorrower)), 3e18);
+
+        // Same borrow now reverts: liquidate is nonReentrant, so the callback's
+        // keeper.checkAndLiquidate reverts, which propagates up and unwinds the borrow
+        vm.expectRevert();
+        fixedBorrower.borrow(200 ether);
+
+        // State unchanged
+        assertEq(fixedLending.collateral(address(fixedBorrower)), 300 ether);
+        assertEq(fixedLending.debt(address(fixedBorrower)), 100 ether);
+        assertEq(fixedLending.collateral(address(fixedKeeper)), 0);
+    }
+
+    function test_FixedNormalBorrowsStillWork() public {
+        LendingGuard fixedLending = new LendingGuard();
+        Keeper fixedKeeper = new Keeper(address(fixedLending));
+        Borrower fixedBorrower = new Borrower(address(fixedLending), address(fixedKeeper));
+
+        fixedBorrower.deposit{value: 200 ether}();
+        fixedBorrower.borrow(100 ether);
+        fixedBorrower.borrow(100 ether); // stays above threshold throughout
+
+        assertEq(fixedLending.collateral(address(fixedBorrower)), 400 ether);
+        assertEq(fixedLending.debt(address(fixedBorrower)), 200 ether);
+        assertEq(fixedLending.collateral(address(fixedKeeper)), 0);
+    }
 }
